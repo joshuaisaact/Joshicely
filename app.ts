@@ -1,5 +1,7 @@
 import { App, type BlockAction, type ButtonAction } from '@slack/bolt'
 import type { Block, KnownBlock } from '@slack/types'
+import type { HomeView } from '@slack/bolt'
+import { getDateSuffix } from './utils/dates'
 
 interface DaySchedule {
   attendees: string[]
@@ -10,11 +12,19 @@ interface WeekSchedule {
   [key: string]: DaySchedule
 }
 
-const getCurrentWeekDates = () => {
+enum AttendanceStatus {
+  Office = 'office',
+  Home = 'home',
+}
+
+const getCurrentWeekDates = (): WeekSchedule => {
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
   const today = new Date()
+
+  // If it's weekend, show next week
+  const isWeekend = today.getDay() === 0 || today.getDay() === 6
   const monday = new Date(today)
-  monday.setDate(monday.getDate() - monday.getDay() + 1)
+  monday.setDate(today.getDate() - today.getDay() + (isWeekend ? 8 : 1))
 
   return days.reduce((acc, day, index) => {
     const date = new Date(monday)
@@ -27,30 +37,35 @@ const getCurrentWeekDates = () => {
   }, {} as WeekSchedule)
 }
 
-const officeSchedule = getCurrentWeekDates()
-
-const app = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  signingSecret: process.env.SLACK_SIGNING_SECRET,
-  socketMode: true,
-  appToken: process.env.SLACK_APP_TOKEN,
-})
-
-app.command('/office', async ({ command, ack, say }) => {
-  await ack()
-
+const generateBlocks = (isHomeView: boolean): (KnownBlock | Block)[] => {
   const blocks: (KnownBlock | Block)[] = [
     {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: isHomeView
+          ? '📅 Office Schedule'
+          : ":coffee: *Here's who's in the office this week*",
+        emoji: true,
+      },
+    },
+    isHomeView && {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: ":coffee: *Here's who's in the office this week*",
+        text: "*Here's who's in the office this week:*",
       },
     },
-  ]
+    isHomeView && {
+      type: 'divider',
+    },
+  ].filter(Boolean) as (KnownBlock | Block)[]
 
-  Object.entries(officeSchedule).forEach(([day, { attendees }]) => {
-    const dayText = `*${day}*\n${attendees.length ? attendees.join(' ') : 'No one yet!'}`
+  Object.entries(officeSchedule).forEach(([day, { attendees, date }]) => {
+    const shortDay = isHomeView ? day.slice(0, 3) : day
+    const dayText = `*${shortDay}${isHomeView ? ` ${date}${getDateSuffix(date)}` : ''}*\n${
+      attendees.length ? attendees.join(' ') : 'No one yet!'
+    }`
 
     blocks.push(
       {
@@ -94,48 +109,121 @@ app.command('/office', async ({ command, ack, say }) => {
     )
   })
 
+  if (isHomeView) {
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: '🔄 Schedule updates automatically each week',
+        },
+      ],
+    })
+  }
+
+  return blocks
+}
+
+const handleAttendanceChange = async (
+  day: string,
+  userId: string,
+  status: AttendanceStatus,
+  client: any,
+): Promise<void> => {
+  if (!day || !(day in officeSchedule)) return
+
+  const user = `<@${userId}>`
+
+  if (status === AttendanceStatus.Office) {
+    if (!officeSchedule[day].attendees.includes(user)) {
+      officeSchedule[day].attendees.push(user)
+    }
+  } else {
+    officeSchedule[day].attendees = officeSchedule[day].attendees.filter(
+      (a) => a !== user,
+    )
+  }
+
+  const emoji = status === AttendanceStatus.Office ? '🏢' : '🏠'
+  const message =
+    status === AttendanceStatus.Office
+      ? `${user} will be in the office on *${day}*!`
+      : `${user} will be working from home on *${day}*`
+
+  await client.chat.postMessage({
+    channel: userId,
+    text: `${message} ${emoji}`,
+  })
+
+  try {
+    await client.views.publish({
+      user_id: userId,
+      view: {
+        type: 'home',
+        blocks: generateBlocks(true),
+      } as HomeView,
+    })
+  } catch (error) {
+    console.error('Error updating home view:', error)
+  }
+}
+
+const officeSchedule = getCurrentWeekDates()
+
+const app = new App({
+  token: process.env.SLACK_BOT_TOKEN,
+  signingSecret: process.env.SLACK_SIGNING_SECRET,
+  socketMode: true,
+  appToken: process.env.SLACK_APP_TOKEN,
+})
+
+app.command('/office', async ({ command, ack, say }) => {
+  await ack()
   await say({
-    blocks,
+    blocks: generateBlocks(false),
     text: "Here's who's in the office this week",
   })
 })
 
-app.action<BlockAction>(/office_.*/, async ({ action, ack, body, say }) => {
+app.action<BlockAction>(/office_.*/, async ({ action, ack, body, client }) => {
   await ack()
-
   const day = action.action_id
     .split('_')[1]
     ?.charAt(0)
     .toUpperCase()
     .concat(action.action_id.split('_')[1]?.slice(1) ?? '')
 
-  if (!day || !(day in officeSchedule)) return
-
-  const user = `<@${body.user.id}>`
-
-  if (!officeSchedule[day].attendees.includes(user)) {
-    officeSchedule[day].attendees.push(user)
-    await say(`${user} will be in the office on *${day}*! 🏢`)
-  }
+  await handleAttendanceChange(
+    day,
+    body.user.id,
+    AttendanceStatus.Office,
+    client,
+  )
 })
 
-app.action<BlockAction>(/home_.*/, async ({ action, ack, body, say }) => {
+app.action<BlockAction>(/home_.*/, async ({ action, ack, body, client }) => {
   await ack()
-
   const day = action.action_id
     .split('_')[1]
     ?.charAt(0)
     .toUpperCase()
     .concat(action.action_id.split('_')[1]?.slice(1) ?? '')
 
-  if (!day || !(day in officeSchedule)) return
+  await handleAttendanceChange(day, body.user.id, AttendanceStatus.Home, client)
+})
 
-  const user = `<@${body.user.id}>`
-
-  officeSchedule[day].attendees = officeSchedule[day].attendees.filter(
-    (a) => a !== user,
-  )
-  await say(`${user} will be working from home on *${day}* 🏠`)
+app.event('app_home_opened', async ({ event, client }) => {
+  try {
+    await client.views.publish({
+      user_id: event.user,
+      view: {
+        type: 'home',
+        blocks: generateBlocks(true),
+      } as HomeView,
+    })
+  } catch (error) {
+    console.error(error)
+  }
 })
 
 const start = async () => {
