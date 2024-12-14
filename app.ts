@@ -1,14 +1,33 @@
-import { App } from '@slack/bolt'
+import { App, type BlockAction, type ButtonAction } from '@slack/bolt'
+import type { Block, KnownBlock } from '@slack/types'
 
-const officeSchedule: { [day: string]: string[] } = {
-  Monday: [],
-  Tuesday: [],
-  Wednesday: [],
-  Thursday: [],
-  Friday: [],
+interface DaySchedule {
+  attendees: string[]
+  date: number
 }
 
-const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+interface WeekSchedule {
+  [key: string]: DaySchedule
+}
+
+const getCurrentWeekDates = () => {
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+  const today = new Date()
+  const monday = new Date(today)
+  monday.setDate(monday.getDate() - monday.getDay() + 1)
+
+  return days.reduce((acc, day, index) => {
+    const date = new Date(monday)
+    date.setDate(monday.getDate() + index)
+    acc[day] = {
+      attendees: [],
+      date: date.getDate(),
+    }
+    return acc
+  }, {} as WeekSchedule)
+}
+
+const officeSchedule = getCurrentWeekDates()
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -17,61 +36,106 @@ const app = new App({
   appToken: process.env.SLACK_APP_TOKEN,
 })
 
-// Command to show weekly schedule
 app.command('/office', async ({ command, ack, say }) => {
   await ack()
 
-  // Build the weekly schedule message
-  let message = ":coffee: Morning! Here's who's in the office this week:\n\n"
-
-  for (const [day, attendees] of Object.entries(officeSchedule)) {
-    const formattedAttendees = attendees.map((user) => `  ${user}`).join('\n')
-    message += `*${day}*\n:office:\n${formattedAttendees}\n\n`
-  }
-
-  await say(message)
-})
-// Handle button interactions for joining a day
-app.command('/office', async ({ command, ack, say }) => {
-  await ack()
-
-  const blocks = Object.keys(officeSchedule).map((day) => ({
-    type: 'section',
-    text: {
-      type: 'mrkdwn',
-      text: `*${day}*`,
-    },
-    accessory: {
-      type: 'button',
+  const blocks: (KnownBlock | Block)[] = [
+    {
+      type: 'section',
       text: {
-        type: 'plain_text',
-        text: 'Join',
+        type: 'mrkdwn',
+        text: ":coffee: *Here's who's in the office this week*",
       },
-      action_id: `join_${day.toLowerCase()}`,
     },
-  }))
+  ]
+
+  Object.entries(officeSchedule).forEach(([day, { attendees }]) => {
+    const dayText = `*${day}*\n${attendees.length ? attendees.join(' ') : 'No one yet!'}`
+
+    blocks.push(
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: dayText,
+        },
+        accessory: {
+          type: 'button',
+          text: {
+            type: 'plain_text',
+            text: '🏢 Office',
+            emoji: true,
+          },
+          style: 'primary',
+          action_id: `office_${day.toLowerCase()}`,
+          value: day.toLowerCase(),
+        },
+      } as KnownBlock,
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: ' ',
+        },
+        accessory: {
+          type: 'button',
+          text: {
+            type: 'plain_text',
+            text: '🏠 Home',
+            emoji: true,
+          },
+          action_id: `home_${day.toLowerCase()}`,
+          value: day.toLowerCase(),
+        },
+      } as KnownBlock,
+      {
+        type: 'divider',
+      },
+    )
+  })
 
   await say({
     blocks,
-    text: "Here's the office schedule for the week!",
+    text: "Here's who's in the office this week",
   })
 })
 
-app.action(/join_.*/, async ({ action, ack, body, say }) => {
+app.action<BlockAction>(/office_.*/, async ({ action, ack, body, say }) => {
   await ack()
 
-  const day =
-    (action.action_id.split('_')[1] || '').charAt(0).toUpperCase() +
-    (action.action_id.split('_')[1] || '').slice(1)
+  const day = action.action_id
+    .split('_')[1]
+    ?.charAt(0)
+    .toUpperCase()
+    .concat(action.action_id.split('_')[1]?.slice(1) ?? '')
+
+  if (!day || !(day in officeSchedule)) return
+
   const user = `<@${body.user.id}>`
 
-  // Add the user to the selected day's list
-  if (!officeSchedule[day]) officeSchedule[day] = []
-  if (!officeSchedule[day].includes(user)) {
-    officeSchedule[day].push(user)
+  if (!officeSchedule[day].attendees.includes(user)) {
+    officeSchedule[day].attendees.push(user)
+    await say(`${user} will be in the office on *${day}*! 🏢`)
   }
+})
 
-  await say(`${user} has joined the office schedule for *${day}*!`)
+app.action<BlockAction>(/home_.*/, async ({ action, ack, body, say }) => {
+  await ack()
+
+  const day = action.action_id
+    .split('_')[1]
+    ?.charAt(0)
+    .toUpperCase()
+    .concat(action.action_id.split('_')[1]?.slice(1) ?? '')
+
+  if (!day || !(day in officeSchedule)) return
+
+  const user = `<@${body.user.id}>`
+
+  officeSchedule[day].attendees = officeSchedule[day].attendees.filter(
+    (a) => a !== user,
+  )
+  await say(`${user} will be working from home on *${day}* 🏠`)
 })
 
 const start = async () => {
