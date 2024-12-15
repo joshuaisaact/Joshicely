@@ -13,6 +13,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@slack/bolt": "^4.1.1"
+    "@slack/bolt": "^4.1.1",
+    "@slack/types": "^2.14.0"
   }
 }

@@ -1,6 +1,5 @@
-// src/services/schedule.ts
 import type { WeekSchedule } from '../types/schedule'
-import { AttendanceStatus } from '../constants/attendance'
+import { AttendanceStatus } from '../constants'
 // Create a schedule
 export const createSchedule = (): WeekSchedule => {
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
