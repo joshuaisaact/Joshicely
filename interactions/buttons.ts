@@ -1,5 +1,9 @@
 // src/interactions/buttons.ts
-import type { AllMiddlewareArgs, BlockActionMiddlewareArgs } from '@slack/bolt'
+import type {
+  AllMiddlewareArgs,
+  SlackActionMiddlewareArgs,
+  BlockElementAction,
+} from '@slack/bolt'
 import type { HomeView } from '../types/slack'
 import type { WeekSchedule } from '../types/schedule'
 import { AttendanceStatus } from '../constants'
@@ -16,8 +20,13 @@ const parseDayFromAction = (action_id: string): string | null => {
   return day || null
 }
 
+type ButtonHandlerArgs = AllMiddlewareArgs &
+  SlackActionMiddlewareArgs & {
+    action: BlockElementAction
+  }
+
 export const officeButtonHandler = async (
-  { action, ack, body, client }: AllMiddlewareArgs & BlockActionMiddlewareArgs,
+  { action, ack, body, client }: ButtonHandlerArgs,
   schedule: WeekSchedule,
 ): Promise<WeekSchedule | undefined> => {
   await ack()
@@ -44,7 +53,7 @@ export const officeButtonHandler = async (
 }
 
 export const homeButtonHandler = async (
-  { action, ack, body, client }: AllMiddlewareArgs & BlockActionMiddlewareArgs,
+  { action, ack, body, client }: ButtonHandlerArgs,
   schedule: WeekSchedule,
 ): Promise<WeekSchedule | undefined> => {
   await ack()
