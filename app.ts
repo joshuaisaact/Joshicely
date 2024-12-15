@@ -1,10 +1,16 @@
 import { App, type BlockAction } from '@slack/bolt'
 import { createSchedule } from './services/schedule'
+import { loadSchedule, saveSchedule } from './services/storage'
 import { appHomeOpenedHandler } from './events/app-home'
 import { officeCommandHandler } from './commands/office'
 import { homeButtonHandler, officeButtonHandler } from './interactions/buttons'
 
 let officeSchedule = createSchedule()
+
+const initializeSchedule = async () => {
+  const stored = await loadSchedule()
+  officeSchedule = stored || createSchedule()
+}
 
 // App initialization
 const app = new App({
@@ -22,12 +28,18 @@ app.command('/office', async (args) => {
 // Interactive components (buttons, etc)
 app.action<BlockAction>(/office_.*/, async (args) => {
   const updatedSchedule = await officeButtonHandler(args, officeSchedule)
-  if (updatedSchedule) officeSchedule = updatedSchedule
+  if (updatedSchedule) {
+    officeSchedule = updatedSchedule
+    await saveSchedule(officeSchedule)
+  }
 })
 
 app.action<BlockAction>(/home_.*/, async (args) => {
   const updatedSchedule = await homeButtonHandler(args, officeSchedule)
-  if (updatedSchedule) officeSchedule = updatedSchedule
+  if (updatedSchedule) {
+    officeSchedule = updatedSchedule
+    await saveSchedule(officeSchedule)
+  }
 })
 
 // Events
@@ -36,6 +48,7 @@ app.event('app_home_opened', async (args) => {
 })
 
 const start = async () => {
+  await initializeSchedule()
   await app.start(process.env.PORT || 3000)
   console.log('⚡️ Joshicely app is running!')
 }
